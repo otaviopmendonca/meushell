@@ -16,6 +16,7 @@ import os, re, signal, subprocess, sys, time
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 T = os.path.abspath(os.environ.get('SO_TESTES') or os.path.join(RAIZ, 'testes'))
 SHELL = os.path.join(RAIZ, 'meushell')
+ROTEIRO_SINAL = 'sleep 5\ncodigo\necho SOBREVIVI\nsair\n'
 
 VERDE, VERMELHO, AMARELO, CINZA, ZERO = '\033[32m', '\033[31m', '\033[33m', '\033[90m', '\033[0m'
 if not sys.stdout.isatty():
@@ -60,6 +61,38 @@ def rodar_roteiro(caminho, limite=20):
         return 124, '', f'passou de {limite} s sem terminar'
 
 
+def abrir_com_roteiro(texto):
+    """
+    Entrega o roteiro ao shell por um ARQUIVO, nao por um cano que fica aberto.
+
+    Com cano aberto, um shell que so produza saida depois do EOF nunca produz
+    nada — e a prova fica esperando para sempre. Com arquivo, o EOF ja esta
+    la desde o comeco e o shell anda no ritmo dele.
+    """
+    import tempfile
+    fh = tempfile.NamedTemporaryFile('w', suffix='.sh', delete=False)
+    fh.write(texto)
+    fh.close()
+    entrada = open(fh.name)
+    proc = subprocess.Popen([SHELL], stdin=entrada, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, cwd=RAIZ,
+                            start_new_session=True)
+    return proc, fh.name
+
+
+def encerrar(proc, caminho, limite=12):
+    try:
+        saida, err = proc.communicate(timeout=limite)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        saida, err = proc.communicate()
+    try:
+        os.unlink(caminho)
+    except OSError:
+        pass
+    return saida, err
+
+
 def diferenca(esperado, veio):
     a, b = esperado.rstrip('\n').split('\n'), veio.rstrip('\n').split('\n')
     for i in range(max(len(a), len(b))):
@@ -68,6 +101,13 @@ def diferenca(esperado, veio):
         if la != lb:
             return f'linha {i+1}: {la!r}', f'linha {i+1}: {lb!r}'
     return repr(esperado[:60]), repr(veio[:60])
+
+
+def caminho_teste(*partes):
+    """Caminho a passar para o shell: relativo quando o corpus e o do repo."""
+    caminho = os.path.join(T, *partes)
+    rel = os.path.relpath(caminho, RAIZ)
+    return rel if not rel.startswith('..') else caminho
 
 
 def roteiros(prefixo):
@@ -132,17 +172,10 @@ def conferir_sem_zumbi(p):
     # ninguem colhe nunca.
     entrada = 'sleep 0.2 &\nsleep 1\necho pronto\nsleep 3\nsair\n'
     try:
-        proc = subprocess.Popen([SHELL], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, cwd=RAIZ)
-        proc.stdin.write(entrada); proc.stdin.flush()
-        limite = time.time() + 8
-        while time.time() < limite:            # espera o shell passar do `echo pronto`
-            linha = proc.stdout.readline()
-            if not linha or 'pronto' in linha:
-                break
-        time.sleep(0.4)                        # ja entrou na linha seguinte: colheu
+        proc, arq = abrir_com_roteiro(entrada)
+        time.sleep(1.8)          # ja passou do `echo pronto` e entrou na linha seguinte
         zumbis = [pid for pid, est in filhos_de(proc.pid) if est == 'Z']
-        _, err = proc.communicate(timeout=10)   # communicate fecha a entrada sozinho
+        _, err = encerrar(proc, arq)
     except Exception as e:
         p.errado(nome, 'o shell rodando', str(e)); return
     if zumbis:
@@ -159,9 +192,7 @@ def conferir_cano_e_cano(p):
     """
     nome = 'o cano e um cano de verdade'
     try:
-        proc = subprocess.Popen([SHELL], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, cwd=RAIZ)
-        proc.stdin.write('sleep 1 | cat\nsair\n'); proc.stdin.flush()
+        proc, arq = abrir_com_roteiro('sleep 1 | cat\nsair\n')
         alvo = destino = None
         for _ in range(30):
             time.sleep(0.1)
@@ -176,7 +207,7 @@ def conferir_cano_e_cano(p):
                     pass
             if alvo:
                 break
-        _, err = proc.communicate(timeout=10)   # communicate fecha a entrada sozinho
+        _, err = encerrar(proc, arq)
     except Exception as e:
         p.errado(nome, 'o shell rodando', str(e)); return
     if alvo is None:
@@ -196,18 +227,19 @@ def conferir_sobrevive_ao_sinal(p):
     padrao ao filho antes do execvp, o filho herda o "ignorar" e nao morre.
     """
     nome = 'Ctrl-C mata o filho e nao o shell'
+    # `codigo` responde a OUTRA metade: 130 e 128+2, ou seja, o filho morreu
+    # pelo sinal 2. Se tivesse herdado o "ignorar", terminaria sozinho com
+    # codigo 0 — e o SOBREVIVI sairia igual. Conferir so o SOBREVIVI seria um
+    # teste que nao sabe dizer o lado.
     try:
-        proc = subprocess.Popen([SHELL], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, cwd=RAIZ,
-                                start_new_session=True)
+        proc, arq = abrir_com_roteiro(ROTEIRO_SINAL)
         # `codigo` depois do sleep responde a OUTRA metade da pergunta: 130 e
         # 128+2, ou seja, o filho morreu pelo sinal 2. Se ele tivesse ignorado
         # o SIGINT, terminaria sozinho e o codigo seria 0 — com o SOBREVIVI
         # saindo igual. Conferir so o SOBREVIVI e um teste que nao diz o lado.
-        proc.stdin.write('sleep 5\ncodigo\necho SOBREVIVI\nsair\n'); proc.stdin.flush()
         time.sleep(0.8)
         os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-        saida, err = proc.communicate(timeout=10)
+        saida, err = encerrar(proc, arq)
     except subprocess.TimeoutExpired:
         proc.kill()
         p.errado(nome, 'o shell continuar depois do sinal',
@@ -244,10 +276,11 @@ def rodar_roteiro_texto(entrada, limite=25):
 
 
 def conferir_medicoes(p):
-    prog = os.path.join('testes', 'programas')
-    girar = f'./{prog}/girar > /dev/null'
-    esperar = f'./{prog}/esperar'
-    comer = f'./{prog}/comer'
+    girar = caminho_teste('programas', 'girar') + ' > /dev/null'
+    esperar = caminho_teste('programas', 'esperar')
+    comer = caminho_teste('programas', 'comer')
+    if not girar.startswith('/'):
+        girar, esperar, comer = './' + girar, './' + esperar, './' + comer
 
     t_girar, e1 = medir(girar, 'tempo')
     t_esperar, e2 = medir(esperar, 'tempo')
