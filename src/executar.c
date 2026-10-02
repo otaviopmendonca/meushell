@@ -45,9 +45,34 @@ int aplicar_redir(struct redir *r)
 
 int executar_comando(char *v[], int n, struct redir *r, int fundo)
 {
-    (void)v; (void)n; (void)r; (void)fundo;
-    FALTA_ESCREVER("a criacao de processos (Entrega 1)");
-    return 3;
+    (void)n;
+    (void)r;
+    (void)fundo;
+
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("meushell: fork");
+        return 1;
+    }
+
+    if (pid == 0) {
+        signal(SIGINT, SIG_DFL);
+
+        execvp(v[0], v);
+
+        fprintf(stderr, "meushell: comando nao encontrado: %s\n", v[0]);
+        _exit(127);
+    }
+
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("meushell: waitpid");
+        return 1;
+    }
+
+    return codigo_de(status);
 }
 
 int executar_com_cano(char *ve[], int ne, struct redir *re,

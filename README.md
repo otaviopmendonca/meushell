@@ -106,3 +106,32 @@ vivo, sorteada na hora, justamente para separar os dois casos.
    do repositório e anexem o `evidencias/verificacao-N.txt`.
 4. Cada integrante recebe uma cópia por e-mail. **Guardem esse e-mail**: é o
    comprovante.
+
+## Entrega 1 — Árvore de processos
+
+Ao executar `ls -l`:
+
+```text
+Antes do fork:
+
+        meushell
+           │
+           └── um único processo
+
+
+Depois do fork:
+
+        meushell (pai)
+           │
+           └── meushell (filho)
+                  │
+                  └── execvp("ls", ...)
+                         │
+                         ▼
+                       ls -l
+
+
+Pai:
+    waitpid() → espera o filho terminar
+
+Os dois processos passam a existir imediatamente após o fork() retornar com sucesso.
