@@ -1,0 +1,9 @@
+
+══ Entrega 1 ══
+  ok   ./meushell existe e e executavel
+  ok   roteiro e1-01-basico
+  ok   roteiro e1-02-codigos
+  ok   roteiro e1-03-aspas
+  ok   roteiro e1-04-vazias
+  ok   roteiro e1-05-sair-codigo
+Entrega 1: 6 de 6 passaram.
